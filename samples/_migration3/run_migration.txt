@@ -1,0 +1,121 @@
+./net-setup.sh -c zephyr1.conf -i zeth.1
+
+./net-setup.sh -c zephyr2.conf -i zeth.2
+
+sudo brctl addbr zeth-br
+sudo brctl addif zeth-br zeth.1
+sudo brctl addif zeth-br zeth.2
+sudo ifconfig zeth-br up
+
+west build -d build/_migration1 -b qemu_x86 -t run \
+   samples/_migration1 -- \
+   -DOVERLAY_CONFIG=overlay-e1000.conf \
+   -DCONFIG_NET_CONFIG_MY_IPV4_ADDR=\"198.51.100.1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV4_ADDR=\"203.0.113.1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV6_ADDR=\"2001:db8:100::1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV6_ADDR=\"2001:db8:200::1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV4_GW=\"203.0.113.1\" \
+   -DCONFIG_ETH_QEMU_IFACE_NAME=\"zeth.1\" \
+   -DCONFIG_ETH_QEMU_EXTRA_ARGS=\"mac=00:00:5e:00:53:01\"
+
+west build -d build/_migration1 -b mps2_an385 -t run \
+   samples/_migration1 -- \
+   -DOVERLAY_CONFIG=overlay-smsc911x.conf \
+   -DCONFIG_NET_CONFIG_MY_IPV4_ADDR=\"198.51.100.1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV4_ADDR=\"203.0.113.1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV6_ADDR=\"2001:db8:100::1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV6_ADDR=\"2001:db8:200::1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV4_GW=\"203.0.113.1\" \
+   -DCONFIG_ETH_QEMU_IFACE_NAME=\"zeth.1\" \
+   -DCONFIG_ETH_QEMU_EXTRA_ARGS=\"mac=00:00:5e:00:53:01\"
+
+west build -d build/_migration1 -b mps2_an385 -t run \
+   samples/_migration1 -- \
+   -DOVERLAY_CONFIG=overlay-smsc911x.conf \
+   -DCONFIG_NET_CONFIG_MY_IPV4_ADDR=\"198.51.100.1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV4_ADDR=\"203.0.113.1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV6_ADDR=\"2001:db8:100::1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV6_ADDR=\"2001:db8:200::1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV4_GW=\"203.0.113.1\" \
+   -DCONFIG_ETH_QEMU_IFACE_NAME=\"zeth.1\" \
+   -DCONFIG_ETH_QEMU_EXTRA_ARGS=\"mac=00:00:5e:00:53:01\"
+
+west build -d build/_migration1 -b mimx8mm_evk_a53 -t run \
+   samples/_migration1 -- \
+   -DOVERLAY_CONFIG=overlay-smsc911x.conf \
+   -DCONFIG_NET_CONFIG_MY_IPV4_ADDR=\"198.51.100.1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV4_ADDR=\"203.0.113.1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV6_ADDR=\"2001:db8:100::1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV6_ADDR=\"2001:db8:200::1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV4_GW=\"203.0.113.1\" \
+   -DCONFIG_ETH_QEMU_IFACE_NAME=\"zeth.1\" \
+   -DCONFIG_ETH_QEMU_EXTRA_ARGS=\"mac=00:00:5e:00:53:01\"
+
+west build -d build/_migration1 -b qemu_cortex_a53 -t run \
+   samples/_migration1 -- \
+   -DOVERLAY_CONFIG=overlay-smsc911x.conf \
+   -DCONFIG_NET_CONFIG_MY_IPV4_ADDR=\"198.51.100.1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV4_ADDR=\"203.0.113.1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV6_ADDR=\"2001:db8:100::1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV6_ADDR=\"2001:db8:200::1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV4_GW=\"203.0.113.1\" \
+   -DCONFIG_ETH_QEMU_IFACE_NAME=\"zeth.1\" \
+   -DCONFIG_ETH_QEMU_EXTRA_ARGS=\"mac=00:00:5e:00:53:01\"
+
+west build -d build/_migration2 -b qemu_x86 -t run \
+   samples/_migration2 -- \
+   -DOVERLAY_CONFIG=overlay-e1000.conf \
+   -DCONFIG_NET_CONFIG_MY_IPV4_ADDR=\"203.0.113.1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV4_ADDR=\"198.51.100.1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV6_ADDR=\"2001:db8:200::1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV6_ADDR=\"2001:db8:100::1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV4_GW=\"198.51.100.1\" \
+   -DCONFIG_ETH_QEMU_IFACE_NAME=\"zeth.2\" \
+   -DCONFIG_ETH_QEMU_EXTRA_ARGS=\"mac=00:00:5e:00:53:02\"
+
+west build -d build/_migration2 -b mps2_an385 -t run \
+   samples/_migration2 -- \
+   -DOVERLAY_CONFIG=overlay-smsc911x.conf \
+   -DCONFIG_NET_CONFIG_MY_IPV4_ADDR=\"203.0.113.1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV4_ADDR=\"198.51.100.1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV6_ADDR=\"2001:db8:200::1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV6_ADDR=\"2001:db8:100::1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV4_GW=\"198.51.100.1\" \
+   -DCONFIG_ETH_QEMU_IFACE_NAME=\"zeth.2\" \
+   -DCONFIG_ETH_QEMU_EXTRA_ARGS=\"mac=00:00:5e:00:53:02\"
+
+west build -d build/_migration2 -b mimx8mm_evk_a53 -t run \
+   samples/_migration2 -- \
+   -DOVERLAY_CONFIG=overlay-smsc911x.conf \
+   -DCONFIG_NET_CONFIG_MY_IPV4_ADDR=\"203.0.113.1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV4_ADDR=\"198.51.100.1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV6_ADDR=\"2001:db8:200::1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV6_ADDR=\"2001:db8:100::1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV4_GW=\"198.51.100.1\" \
+   -DCONFIG_ETH_QEMU_IFACE_NAME=\"zeth.2\" \
+   -DCONFIG_ETH_QEMU_EXTRA_ARGS=\"mac=00:00:5e:00:53:02\"
+
+west build -d build/_migration2 -b qemu_cortex_a53 -t run \
+   samples/_migration2 -- \
+   -DOVERLAY_CONFIG=overlay-smsc911x.conf \
+   -DCONFIG_NET_CONFIG_MY_IPV4_ADDR=\"203.0.113.1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV4_ADDR=\"198.51.100.1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV6_ADDR=\"2001:db8:200::1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV6_ADDR=\"2001:db8:100::1\" \
+   -DCONFIG_NET_CONFIG_MY_IPV4_GW=\"198.51.100.1\" \
+   -DCONFIG_ETH_QEMU_IFACE_NAME=\"zeth.2\" \
+   -DCONFIG_ETH_QEMU_EXTRA_ARGS=\"mac=00:00:5e:00:53:02\"
+
+
+
+
+west build -d build/_migration1 -b qemu_x86 -t run \
+   samples/_migration1 -- \
+   -DOVERLAY_CONFIG=overlay-e1000.conf \
+   -DCONFIG_NET_CONFIG_MY_IPV4_ADDR=\"198.51.100.1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV4_ADDR=\"198.51.100.6\" \
+   -DCONFIG_NET_CONFIG_MY_IPV6_ADDR=\"2001:db8:100::1\" \
+   -DCONFIG_NET_CONFIG_PEER_IPV6_ADDR=\"2001:db8:100::6\" \
+   -DCONFIG_NET_CONFIG_MY_IPV4_GW=\"198.51.100.1\" \
+   -DCONFIG_ETH_QEMU_IFACE_NAME=\"zeth.1\" \
+   -DCONFIG_ETH_QEMU_EXTRA_ARGS=\"mac=00:00:5e:00:53:01\"

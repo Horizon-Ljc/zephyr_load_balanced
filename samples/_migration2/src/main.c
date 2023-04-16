@@ -1,9 +1,21 @@
 #include <stdio.h>
 #include <zephyr/kernel.h>
 #include <zephyr/sys/printk.h>
-#include <zephyr/net/socket.h>
-
+// #include <zephyr/net/socket.h>
+// #include <poll.h>
+#include <errno.h>
 #include <zephyr/random/rand32.h>
+
+#if !defined(__ZEPHYR__) || defined(CONFIG_POSIX_API)
+
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <poll.h>
+
+#endif
 
 /* size of stack area used by each thread */
 #define STACKSIZE 2048
@@ -40,8 +52,14 @@
 #define SYSTEM_NUM 3
 #define LOAD_ALPHA 114514
 // #define MACHINE_NO CONFIG_MACHINE_NO
-#define BUFFER_SIZE_SOCKET1 1024
+#define BUFFER_SIZE_SOCKET1 256
 #define BUFFER_SIZE_SOCKET2 21
+
+#ifdef CONFIG_NET_SOCKETS_POLL_MAX
+#define POLL_NUM CONFIG_NET_SOCKETS_POLL_MAX
+#else
+#define POLL_NUM 5
+#endif
 
 K_THREAD_STACK_DEFINE(threadA_stack_area, STACKSIZE);
 static struct k_thread threadA_data;
@@ -58,11 +76,11 @@ static struct k_thread thread_client1_data;
 K_THREAD_STACK_DEFINE(thread_client2_stack, STACKSIZE);
 static struct k_thread thread_client2_data;
 
-K_THREAD_STACK_DEFINE(migraton_handle_stack_1, STACKSIZE);
-static struct k_thread migraton_handle_data_1;
+// K_THREAD_STACK_DEFINE(migraton_handle_stack_1, STACKSIZE);
+// static struct k_thread migraton_handle_data_1;
 
-K_THREAD_STACK_DEFINE(migraton_handle_stack_2, STACKSIZE);
-static struct k_thread migraton_handle_data_2;
+// K_THREAD_STACK_DEFINE(migraton_handle_stack_2, STACKSIZE);
+// static struct k_thread migraton_handle_data_2;
 
 // K_THREAD_STACK_DEFINE(migraton_handle_stack_3, STACKSIZE);
 // static struct k_thread migraton_handle_data_3;
@@ -96,8 +114,7 @@ struct Thread_state {
     int cpuloads;
     int stackloads;
     /* 线程栈 */
-    // Reduce the size of the stack first, if the program is too large for some reason it will crash
-    // Crash when the value of the array size is close to the size of the stack
+    // todo: reduce the size of the stack first, if the program is too large for some reason it will crash
     char stack[BUFFER_SIZE_SOCKET1];
 
     /* 线程寄存器 */
@@ -195,42 +212,6 @@ void system_migration_handle()
     k_sched_unlock();
 }
 
-void migration_server_handle(void *client_sock, void *dummy2, void *dummy3)
-{
-    int client_sock_2 = *(int *)(client_sock);
-    while(1){
-        memset(recv_buffer, 0 ,sizeof(recv_buffer));
-
-        int ret;
-        ret = recv(client_sock_2, (char *)&thread_state_r, sizeof(thread_state_r), 0);
-
-        if (ret < 0) {
-            printf("[server handle]: Failed to recv data\n");
-            printf("[server handle]: end\n");
-            // close(sock);
-            continue;
-            // client_no--;
-            // return ;
-        }else if(ret == 0){
-            printf("[server handle]: no data received yet\n");
-            k_msleep(3000); 
-            continue;       
-        }
-
-        printf("[server handle]: recive data, size is %d\n", ret);
-
-		printf("[server handle]: recive load data\n");
-
-		system_loadget_handle();
-
-        if(thread_state_r.cond_migration != 0){
-            printf("[migration server handle]: recive migration data\n");
-
-            system_migration_handle();
-        }
-    }
-}
-
 void migration_server(void *dummy1, void *dummy2, void *dummy3)
 {
     ARG_UNUSED(dummy1);
@@ -241,7 +222,6 @@ void migration_server(void *dummy1, void *dummy2, void *dummy3)
 
 #ifdef CONFIG_NET_IPV6
     struct sockaddr_in6 client_addr;
-    socklen_t client_addr_len = sizeof(client_addr);
 
     struct sockaddr_in6 server_addr = {
         .sin6_family = AF_INET6,
@@ -283,45 +263,85 @@ void migration_server(void *dummy1, void *dummy2, void *dummy3)
     // tag accepted client number, todo: if the connection is close, client_no should reduce one
     int client_no = 0;
 
-    while(1){
-        k_msleep(1000);
+    // 初始化检测的文件描述符数组
+    struct pollfd fds[POLL_NUM];
+    for(int i = 0; i < POLL_NUM; i++) {
+        fds[i].fd = -1;
+        fds[i].events = POLLIN;
+    }
+    fds[0].fd = sock;
+    int nfds = 0;
 
-        // todo: extend
-        if((client_no + 1) == SYSTEM_NUM){
-            k_sleep(K_FOREVER);
+    while(1) {
+        // 调用poll系统函数，让内核帮检测哪些文件描述符有数据
+        int ret = poll(fds, nfds + 1, -1);
+        if(ret == -1) {
+            perror("poll");
+            exit(-1);
+        } else if(ret == 0) {
+            continue;
+        } else if(ret > 0) {
+            // 说明检测到了有文件描述符的对应的缓冲区的数据发生了改变
+            if(fds[0].revents & POLLIN) {
+                // 表示有新的客户端连接进来了
+                struct sockaddr_in cliaddr;
+                int len = sizeof(cliaddr);
+                int cfd = accept(sock, (struct sockaddr *)&cliaddr, &len);
+                client_no++;
+                printf("[migration server]: new connection fd is %d\n", cfd);
+
+                if(cfd == -1){
+                    printf("[migration server]: Failed to accept\n");
+                    printf("[migration server]: end\n");
+                    perror("accept");
+                    continue ;
+                }
+
+                // 将新的文件描述符加入到集合中
+                for(int i = 1; i < POLL_NUM; i++) {
+                    if(fds[i].fd == -1) {
+                        fds[i].fd = cfd;
+                        fds[i].events = POLLIN;
+                        break;
+                    }
+                }
+
+                // 更新最大的文件描述符的索引
+                nfds = nfds > cfd ? nfds : cfd;
+                printf("[migration server]: max fd indexis %d\n", nfds);
+            }
+
+            for(int i = 1; i <= nfds; i++) {
+                if(fds[i].revents & POLLIN) {
+                    // 说明这个文件描述符对应的客户端发来了数据
+                    // char buf[1024] = {0};
+                    int len = recv(fds[i].fd, (char *)&thread_state_r, sizeof(thread_state_r), 0);
+                    if(len == -1) {
+                        perror("read");
+                        // exit(-1);
+                    } else if(len == 0) {
+                        printf("[migration server]: fd(%d) client closed...\n", fds[i].fd);
+                        close(fds[i].fd);
+                        client_no--;
+                        fds[i].fd = -1;
+                    } else if(len > 0) {
+                        printf("[server handle]: recive data, size is %d\n", len);
+
+                        printf("[server handle]: recive load data\n");
+
+                        system_loadget_handle();
+
+                        if(thread_state_r.cond_migration != 0){
+                            printf("[migration server handle]: recive migration data\n");
+
+                            system_migration_handle();
+                        }
+                    }
+                }
+            }
+
         }
 
-        printf("[migration server]: migration server waiting accept\n");
-
-        // todo :poll(); if a client connection request is made, a new thread is created for processing
-        int client_sock = accept(sock, (struct sockaddr *)&client_addr, &client_addr_len);
-
-        if(client_sock == -1){
-            printf("[migration server]: Failed to accept\n");
-            printf("[migration server]: end\n");
-            continue ;
-        }
-        printf("[migration server]: migration server accept %d client\n", client_no + 1);
-
-        if(client_no == 0){
-            client_no ++;
-            k_thread_create(&migraton_handle_data_1, migraton_handle_stack_1,
-                    K_THREAD_STACK_SIZEOF(migraton_handle_stack_1),
-                    migration_server_handle, (void *)&client_sock, NULL, NULL,
-                    PRIORITY, 0, K_NO_WAIT);
-            k_thread_name_set(&migraton_handle_data_1, "migraton_handle_data_1");
-        }else if(client_no == 1){
-            client_no ++;
-            k_thread_create(&migraton_handle_data_2, migraton_handle_stack_2,
-                    K_THREAD_STACK_SIZEOF(migraton_handle_stack_2),
-                    migration_server_handle, (void *)&client_sock, NULL, NULL,
-                    PRIORITY, 0, K_NO_WAIT);
-            k_thread_name_set(&migraton_handle_data_2, "migraton_handle_data_2");
-        }else {
-            // todo: expand more connection
-            printf("client connection is full\n");
-        }
-        k_msleep(1000);
     }
     close(sock);
 }
@@ -384,6 +404,7 @@ void migration_client_socket(void *dummy1, void *dummy2, void *dummy3)
         if(ret < 0){
             printf("[migration client socket 1]: failed to connect\n");
             printf("[migration client socket 1]: start to reconnect\n");
+            perror("connect");
             // k_msleep(5000);
             close(sock);
             //return ;
@@ -411,6 +432,7 @@ void migration_client_socket(void *dummy1, void *dummy2, void *dummy3)
 
 			if (ret < 0) {
 				printf("[migration client socket 1]: Failed to send data\n");
+                perror("send");
 				continue;                  
 			}
 
@@ -467,6 +489,7 @@ void migration_client_socket_2(void *dummy1, void *dummy2, void *dummy3)
         if(ret < 0){
             printf("[migration client socket 2]: failed to connect\n");
             printf("[migration client socket 2]: start to reconnect\n");
+            perror("connect");
             // k_msleep(5000);
             close(sock);
             // return ;
@@ -494,6 +517,7 @@ void migration_client_socket_2(void *dummy1, void *dummy2, void *dummy3)
 
 			if (ret < 0) {
 				printf("[migration client socket 2]: Failed to send data\n");
+                perror("send");
 				continue;                  
 			}
 

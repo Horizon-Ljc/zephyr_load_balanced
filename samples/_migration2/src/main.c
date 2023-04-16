@@ -30,7 +30,7 @@
 // todo: extend
 #ifdef CONFIG_NET_IPV6
     #define SERVER_ADDR CONFIG_NET_CONFIG_PEER_IPV6_ADDR
-    #define SERVER_ADDR_2 "2001:db8:100::7"
+    #define SERVER_ADDR_2 "2001:db8:300::1"
     #define CLIENT_ADDR CONFIG_NET_CONFIG_MY_IPV6_ADDR
 #endif
 
@@ -229,7 +229,7 @@ void migration_server(void *dummy1, void *dummy2, void *dummy3)
     };
     inet_pton(AF_INET6, CLIENT_ADDR, &server_addr.sin6_addr);
 
-    int sock = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+    int sock = zsock_socket(AF_INET6, SOCK_DGRAM, 0);
 #endif
 
 #ifdef CONFIG_NET_IPV4
@@ -242,7 +242,7 @@ void migration_server(void *dummy1, void *dummy2, void *dummy3)
     };
     inet_pton(AF_INET, CLIENT_ADDR, &server_addr.sin_addr);
 
-    int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+    int sock = zsock_socket(AF_INET, SOCK_DGRAM, 0);
 #endif
 
     if (sock < 0) {
@@ -251,17 +251,12 @@ void migration_server(void *dummy1, void *dummy2, void *dummy3)
         return;
     }   
 
-    int ret = bind(sock, (struct sockaddr *)&server_addr, sizeof(server_addr));
+    int ret = zsock_bind(sock, (struct sockaddr *)&server_addr, sizeof(server_addr));
     if (ret < 0) {
         printf("[migration server]: Failed to bind socket\n");
-        close(sock);
+        zsock_close(sock);
         return;
     }
-
-    listen(sock, SYSTEM_NUM + 5);
-
-    // tag accepted client number, todo: if the connection is close, client_no should reduce one
-    int client_no = 0;
 
     // 初始化检测的文件描述符数组
     struct pollfd fds[POLL_NUM];
@@ -274,76 +269,41 @@ void migration_server(void *dummy1, void *dummy2, void *dummy3)
 
     while(1) {
         // 调用poll系统函数，让内核帮检测哪些文件描述符有数据
-        int ret = poll(fds, nfds + 1, -1);
+        int ret = zsock_poll(fds, nfds + 1, -1);
         if(ret == -1) {
             perror("poll");
-            exit(-1);
+            // exit(-1);
         } else if(ret == 0) {
             continue;
         } else if(ret > 0) {
             // 说明检测到了有文件描述符的对应的缓冲区的数据发生了改变
-            if(fds[0].revents & POLLIN) {
-                // 表示有新的客户端连接进来了
-                struct sockaddr_in cliaddr;
-                int len = sizeof(cliaddr);
-                int cfd = accept(sock, (struct sockaddr *)&cliaddr, &len);
-                client_no++;
-                printf("[migration server]: new connection fd is %d\n", cfd);
+            int len = zsock_recvfrom(sock, (char *)&thread_state_r, sizeof(thread_state_r), 0, NULL, NULL);
+            if(len == -1) {
+                perror("read");
+                // exit(-1);
+            } else if(len == 0) {
+                printf("[migration server]: fd(%d) client closed...\n", sock);
+                break;
+                // client_no--;
+            } else if(len > 0) {
+                printf("[server handle]: recive data, size is %d\n", len);
 
-                if(cfd == -1){
-                    printf("[migration server]: Failed to accept\n");
-                    printf("[migration server]: end\n");
-                    perror("accept");
-                    continue ;
-                }
+                printf("[server handle]: recive load data\n");
 
-                // 将新的文件描述符加入到集合中
-                for(int i = 1; i < POLL_NUM; i++) {
-                    if(fds[i].fd == -1) {
-                        fds[i].fd = cfd;
-                        fds[i].events = POLLIN;
-                        break;
-                    }
-                }
+                printf("[server handle]: thread_state_r.no is %d\n", thread_state_r.no);
+                system_loadget_handle();
 
-                // 更新最大的文件描述符的索引
-                nfds = nfds > cfd ? nfds : cfd;
-                printf("[migration server]: max fd indexis %d\n", nfds);
-            }
+                if(thread_state_r.cond_migration != 0){
+                    printf("[migration server handle]: recive migration data\n");
 
-            for(int i = 1; i <= nfds; i++) {
-                if(fds[i].revents & POLLIN) {
-                    // 说明这个文件描述符对应的客户端发来了数据
-                    // char buf[1024] = {0};
-                    int len = recv(fds[i].fd, (char *)&thread_state_r, sizeof(thread_state_r), 0);
-                    if(len == -1) {
-                        perror("read");
-                        // exit(-1);
-                    } else if(len == 0) {
-                        printf("[migration server]: fd(%d) client closed...\n", fds[i].fd);
-                        close(fds[i].fd);
-                        client_no--;
-                        fds[i].fd = -1;
-                    } else if(len > 0) {
-                        printf("[server handle]: recive data, size is %d\n", len);
-
-                        printf("[server handle]: recive load data\n");
-
-                        system_loadget_handle();
-
-                        if(thread_state_r.cond_migration != 0){
-                            printf("[migration server handle]: recive migration data\n");
-
-                            system_migration_handle();
-                        }
-                    }
+                    system_migration_handle();
                 }
             }
-
         }
 
     }
-    close(sock);
+    zsock_close(sock);
+
 }
 
 void thread_loadget()
@@ -377,7 +337,7 @@ void migration_client_socket(void *dummy1, void *dummy2, void *dummy3)
         };
         inet_pton(AF_INET6, SERVER_ADDR, &server_addr.sin6_addr);
 
-        int sock = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+        int sock = zsock_socket(AF_INET6, SOCK_DGRAM, 0);
     #endif
 
     #ifdef CONFIG_NET_IPV4
@@ -387,31 +347,35 @@ void migration_client_socket(void *dummy1, void *dummy2, void *dummy3)
         };
         inet_pton(AF_INET, SERVER_ADDR, &server_addr.sin_addr);
 
-        int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        int sock = zsock_socket(AF_INET, SOCK_DGRAM, 0);
     #endif
 
         if (sock < 0) {
             printf("[migration client socket 1]: Failed to create socket\n");
-            close(sock);
+            zsock_close(sock);
             return;
         }
 
         printf("[migration client socket 1]: waiting connect\n");
         int ret = -1;
 
-        ret = connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr));
+        ret = zsock_connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr));
 
         if(ret < 0){
             printf("[migration client socket 1]: failed to connect\n");
             printf("[migration client socket 1]: start to reconnect\n");
             perror("connect");
-            // k_msleep(5000);
-            close(sock);
-            //return ;
+            printf("[migration client socket 1]: %s\n", strerror(errno));
+
+            printf("[migration client socket 1]: %d\n", errno);
+
+            zsock_close(sock);
+            k_msleep(100);
+
             continue;
-        }else {
-            printf("[migration client socket 1]: connected\n");
         }
+
+        printf("[migration client socket 1]: connected\n");
 
         while(1){
             k_msleep(10000);
@@ -425,7 +389,7 @@ void migration_client_socket(void *dummy1, void *dummy2, void *dummy3)
 				thread_state.cond_migration = 1;
             }
 
-			ret = send(sock, (char *)&thread_state, sizeof(thread_state), 0);
+			ret = zsock_sendto(sock, (char *)&thread_state, sizeof(thread_state), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
 
 			// printf("[migration client socket 1]: send data's hash is %u, sizeof(send_buffer) is %d\n",
 			// 	fnv1a_hash(send_buffer, sizeof(send_buffer)), sizeof(send_buffer));
@@ -444,7 +408,7 @@ void migration_client_socket(void *dummy1, void *dummy2, void *dummy3)
         }
         printf("[migration client socket 1]: end\n");
 
-        close(sock);
+        zsock_close(sock);
     }
 }
 
@@ -461,8 +425,9 @@ void migration_client_socket_2(void *dummy1, void *dummy2, void *dummy3)
             .sin6_port = htons(PORT),
         };
         inet_pton(AF_INET6, SERVER_ADDR_2, &server_addr.sin6_addr);
+        int addrlen = sizeof(server_addr);
 
-        int sock = socket(AF_INET6, SOCK_STREAM, IPPROTO_TCP);
+        int sock = zsock_socket(AF_INET6, SOCK_DGRAM, 0);
     #endif
 
     #ifdef CONFIG_NET_IPV4
@@ -471,32 +436,37 @@ void migration_client_socket_2(void *dummy1, void *dummy2, void *dummy3)
             .sin_port = htons(PORT),
         };
         inet_pton(AF_INET, SERVER_ADDR_2, &server_addr.sin_addr);
+        int addrlen = sizeof(server_addr);
 
-        int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+        int sock = zsock_socket(AF_INET, SOCK_DGRAM, 0);
     #endif
 
         if (sock < 0) {
             printf("[migration client socket 2]: Failed to create socket\n");
-            close(sock);
+            zsock_close(sock);
             return;
         }
 
         printf("[migration client socket 2]: waiting connect\n");
         int ret = -1;
 
-        ret = connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr));
+        ret = zsock_connect(sock, (struct sockaddr *)&server_addr, sizeof(server_addr));
 
         if(ret < 0){
             printf("[migration client socket 2]: failed to connect\n");
             printf("[migration client socket 2]: start to reconnect\n");
             perror("connect");
-            // k_msleep(5000);
-            close(sock);
-            // return ;
+            printf("[migration client socket 2]: %s\n", strerror(errno));
+
+            printf("[migration client socket 2]: %d\n", errno);
+
+            zsock_close(sock);
+            k_msleep(100);
+
             continue;
-        }else {
-            printf("[migration client socket 2]: connected\n");
         }
+
+        printf("[migration client socket 2]: connected\n");
 
         while(1){
             k_msleep(10000);
@@ -510,7 +480,7 @@ void migration_client_socket_2(void *dummy1, void *dummy2, void *dummy3)
 				thread_state.cond_migration = 1;
             }
 
-			ret = send(sock, (char *)&thread_state, sizeof(thread_state), 0);
+			ret = zsock_sendto(sock, (char *)&thread_state, sizeof(thread_state), 0, (struct sockaddr *)&server_addr, sizeof(server_addr));
 
 			// printf("[migration client socket 1]: send data's hash is %u, sizeof(send_buffer) is %d\n",
 			// 	fnv1a_hash(send_buffer, sizeof(send_buffer)), sizeof(send_buffer));
@@ -529,7 +499,7 @@ void migration_client_socket_2(void *dummy1, void *dummy2, void *dummy3)
         }
         printf("[migration client socket 2]: end\n");
 
-        close(sock);
+        zsock_close(sock);
     }
 }
 

@@ -36,8 +36,8 @@
 #define PORT_2 1081
 
 // todo: extend
-#define MACHINE_NUM 0
-#define SYSTEM_NUM 2
+#define MACHINE_NUM 1
+#define SYSTEM_NUM 5
 #define LOAD_ALPHA 114514
 // #define MACHINE_NO CONFIG_MACHINE_NO
 #define BUFFER_SIZE_SOCKET1 1024
@@ -52,23 +52,14 @@ static struct k_thread threadB_data;
 K_THREAD_STACK_DEFINE(threadC_stack_area, STACKSIZE);
 static struct k_thread threadC_data;
 
-// K_THREAD_STACK_DEFINE(threadD_stack_area, STACKSIZE);
-// static struct k_thread threadD_data;
-
-// K_THREAD_STACK_DEFINE(threadE_stack_area, STACKSIZE);
-// static struct k_thread threadE_data;
-
 K_THREAD_STACK_DEFINE(thread_client1_stack, STACKSIZE);
 static struct k_thread thread_client1_data;
-
-// K_THREAD_STACK_DEFINE(thread_client2_stack, STACKSIZE);
-// static struct k_thread thread_client2_data;
 
 K_THREAD_STACK_DEFINE(migraton_handle_stack_1, STACKSIZE);
 static struct k_thread migraton_handle_data_1;
 
-// K_THREAD_STACK_DEFINE(migraton_handle_stack_2, STACKSIZE);
-// static struct k_thread migraton_handle_data_2;
+K_THREAD_STACK_DEFINE(migraton_handle_stack_2, STACKSIZE);
+static struct k_thread migraton_handle_data_2;
 
 struct _callee_saved register_save;
 char *sp_addressm;
@@ -95,8 +86,12 @@ char recv_buffer_2[BUFFER_SIZE_SOCKET2];
 int i;
 
 struct Thread_state {
-    /* 线程栈 */
+    int cond_migration;
 
+    int no;
+    int cpuloads;
+    int stackloads;
+    /* 线程栈 */
     // Reduce the size of the stack first, if the program is too large for some reason it will crash
     // Crash when the value of the array size is close to the size of the stack
     // char stack[STACKSIZE+2];
@@ -108,10 +103,12 @@ struct Thread_state {
 #endif
 } thread_state, thread_state_r;
 
-char send_buffer[sizeof(thread_state)+2];
-char recv_buffer[sizeof(thread_state_r)+2];
+char send_buffer[sizeof(thread_state)+5];
+char recv_buffer[sizeof(thread_state_r)+5];
 
 void calc_system_load();
+
+void thread_analyze_get(struct k_thread *cthread, size_t *cpuload, size_t *stackload);
 
 K_SEM_DEFINE(migration_server_handle_sem, 0, 1);
 
@@ -131,26 +128,25 @@ unsigned int fnv1a_hash(char *data, int len)
 void system_loadget_handle()
 {
     k_sched_lock();
-    memset(&load_temp, 0, sizeof(load_temp));
+    // memset(&load_temp, 0, sizeof(load_temp));
 
-    memcpy(&load_temp, recv_buffer_2, sizeof(load_temp));
+    // memcpy(&load_temp, recv_buffer_2, sizeof(load_temp));
 
-    printf("[system_loadget handle]: system_no %u, cpuload %u %% , stackload %u %%\n", load_temp.no, 
-        load_temp.cpuloads, load_temp.stackloads);
+    printf("[system_loadget handle]: system_no %u, cpuload %u %% , stackload %u %%\n", thread_state_r.no, 
+        thread_state_r.cpuloads, thread_state_r.stackloads);
 
-    array_load[load_temp.no].cpuloads = load_temp.cpuloads;
-    array_load[load_temp.no].stackloads = load_temp.stackloads;
+    array_load[thread_state_r.no].cpuloads = thread_state_r.cpuloads;
+    array_load[thread_state_r.no].stackloads = thread_state_r.stackloads;
 
-    printf("[system_loadget handle]: ");
-    calc_system_load();
+    // printf("[system_loadget handle]: ");
+    // calc_system_load();
     k_sched_unlock();
-    k_msleep(3000);
+    // k_msleep(3000);
 }
 
 void system_migration_handle()
 {
     k_sched_lock(); 
-    memcpy(&thread_state_r, recv_buffer, sizeof(thread_state_r));
 
     // Thread Recovery; need to preemption prevention
 #ifdef CONFIG_X86
@@ -163,59 +159,66 @@ void system_migration_handle()
 
     threadA_data.callee_saved.esp = thread_state_r.esp;
 
-    memcpy(thread_state_r.esp - 20, thread_state_r.stack, thread_stk.start + thread_stk.size - thread_state_r.esp + 20);
+    memcpy((void *)((size_t)thread_state_r.esp - 20), thread_state_r.stack,
+            thread_stk.start + thread_stk.size - (size_t)thread_state_r.esp + 20);
+    printf("[migration server handle]: para1 is %d para2 is %d para3 is %d\n", (void *)((size_t)thread_state_r.esp - 20),
+            thread_state_r.stack, thread_stk.start + thread_stk.size - (size_t)thread_state_r.esp + 20);
 #endif
 
     printf("\n[migration server handle]: load stack space success\n");
 
     printf("[migration server handle]: end\n");
     k_sched_unlock();
-    k_msleep(3000);
+    // k_msleep(3000);
 }
 
 // tag accepted client number
 int client_no = 0;
 
-void migration_server_handle(int client_sock, void *dummy2, void *dummy3)
+void migration_server_handle(void *client_sock, void *dummy2, void *dummy3)
 {
+    int client_sock_2 = *(int *)(client_sock);
     while(1){
         memset(recv_buffer, 0 ,sizeof(recv_buffer)); // test
-        memset(recv_buffer_2, 0, sizeof(recv_buffer_2));
-        memset(&thread_state_r, 0, sizeof(thread_state_r));
+        // memset(&thread_state_r, 0, sizeof(thread_state_r));
 
         int ret;
-        ret = recv(client_sock, recv_buffer, sizeof(recv_buffer), 0);
+        ret = recv(client_sock_2, (char *)&thread_state_r, sizeof(thread_state_r), 0);
 
         if (ret < 0) {
             printf("[migration server handle]: Failed to recv migration data\n");
             printf("[migration server handle]: end\n");
             // close(sock);
             // continue;
-            client_no--;
+            // client_no--;
             return ;
         }else if(ret == 0){
             printf("[migration server handle]: no data received yet\n");
             k_msleep(3000); 
             continue;       
         }
+
         printf("[migration server handle]: recive data, size is %d\n", ret);
 
-        if(ret == sizeof(thread_state)){
+		// memcpy(&thread_state_r, recv_buffer, sizeof(thread_state_r));
+
+		printf("[migration server handle]: recive load data\n");
+		// printf("[migration server handle]: recive load data's hash is %u\n",
+		// fnv1a_hash(recv_buffer, sizeof(load_temp)));
+
+		// memcpy(recv_buffer_2, recv_buffer, sizeof(load_temp));// test
+
+		// system_loadget_handle();
+
+        if(thread_state_r.cond_migration != 0){
             printf("[migration server handle]: recive migration data\n");
 
-            printf("[migration server handle]: recive migration data's hash is %u\n",
-            fnv1a_hash(recv_buffer, sizeof(thread_state)));
+            // printf("[migration server handle]: recive migration data's hash is %u\n",
+            // fnv1a_hash(recv_buffer, sizeof(thread_state)));
 
             system_migration_handle();
-        }else if(ret == sizeof(load_temp)){
-            printf("[migration server handle]: recive load data\n");
-            printf("[migration server handle]: recive load data's hash is %u\n",
-            fnv1a_hash(recv_buffer, sizeof(load_temp)));
-
-            memcpy(recv_buffer_2, recv_buffer, sizeof(load_temp));// test
-
-            system_loadget_handle();
         }
+        
         // if(k_sem_take(&migration_client_socket_1, K_MSEC(500)) == 0)
 
     }
@@ -289,7 +292,7 @@ void migration_server(void *dummy1, void *dummy2, void *dummy3)
             client_no ++;
             k_thread_create(&migraton_handle_data_1, migraton_handle_stack_1,
                     K_THREAD_STACK_SIZEOF(migraton_handle_stack_1),
-                    migration_server_handle, client_sock, NULL, NULL,
+                    migration_server_handle, (void *)&client_sock, NULL, NULL,
                     PRIORITY, 0, K_NO_WAIT);
             k_thread_name_set(&migraton_handle_data_1, "migraton_handle_data_1");
         }else if(client_no == 1){
@@ -309,35 +312,20 @@ void migration_server(void *dummy1, void *dummy2, void *dummy3)
 
 void thread_loadget(int sock)
 {
-    data_send.no = MACHINE_NUM;
+    // thread_state.no = MACHINE_NUM;
+    thread_state.no = MACHINE_NUM + 1;
 
     thread_analyze_get(&threadA_data, &cpuload, &stackload);
-    printf("[host]: machine number %u, cpuload:%u %% stackload:%u %%\n", MACHINE_NUM, cpuload, stackload);
+    printf("[migration client socket 1]: machine number %u, cpuload:%u %% stackload:%u %%\n",
+		MACHINE_NUM, cpuload, stackload);
 
     array_load[MACHINE_NUM].cpuloads = cpuload;
     array_load[MACHINE_NUM].stackloads = stackload;
 
-    data_send.cpuloads = cpuload;
-    data_send.stackloads = stackload;
+    thread_state.cpuloads = cpuload;
+    thread_state.stackloads = stackload;
 
-    // printf("[host]: ");
-    // calc_system_load();
-
-    printf("[host]: size of load_datas to be sent is %d\n", sizeof(data_send));
-
-    // send thread load status
-    memset(send_buffer_2, 0, sizeof(send_buffer_2));
-    memcpy(send_buffer_2, &data_send, sizeof(data_send));
-
-    int ret = send(sock, send_buffer_2, sizeof(data_send), 0);
-    // int ret = 0;
-
-    if (ret < 0) {
-        printf("[host]: Failed to send load data\n");
-    }
-    printf("[host]: send load data's hash is %u\n",
-        fnv1a_hash(send_buffer_2, sizeof(data_send)));
-    printf("[host]: send load data success, size of data is %d\n", ret);
+	thread_state.cond_migration = 0;// No migration by default
 }
 
 K_SEM_DEFINE(migration_client_socket_1, 0, 1);
@@ -394,29 +382,27 @@ void migration_client_socket()
 
             thread_loadget(sock);
 
-            k_msleep(5000);
-            if(k_sem_take(&migration_client_socket_1, K_MSEC(500)) == 0){
+            // k_msleep(5000);
+            if(k_sem_take(&migration_client_socket_1, K_MSEC(50)) == 0){
                 //k_sem_take(&migration_client_1, K_FOREVER);
-                k_sched_lock();
                 // send thread status
-                memset(send_buffer, 0, sizeof(send_buffer));
-                memcpy(send_buffer, &thread_state, sizeof(thread_state));
-
-                ret = send(sock, send_buffer, sizeof(thread_state), 0);
-
-                printf("[migration client socket 1]: send migration data's hash is %u\n",
-                    fnv1a_hash(send_buffer, sizeof(thread_state)));
-
-                if (ret < 0) {
-                    printf("[migration client socket 1]: Failed to send migration data\n");
-                    printf("[migration client socket 1]: end\n");
-                    break;                  
-                }
-
-                printf("[migration client socket 1]: send migration data success, size of data is %d\n", ret);
-
-                k_sched_unlock();
+				thread_state.cond_migration = 1;
             }
+			memset(send_buffer, 0, sizeof(send_buffer));
+			memcpy(send_buffer, &thread_state, sizeof(thread_state));
+
+			ret = send(sock, (char *)&thread_state, sizeof(send_buffer), 0);
+
+			printf("[migration client socket 1]: send data's hash is %u, sizeof(send_buffer) is %d\n",
+				fnv1a_hash(send_buffer, sizeof(send_buffer)), sizeof(send_buffer));
+
+			if (ret < 0) {
+				printf("[migration client socket 1]: Failed to send data\n");
+				printf("[migration client socket 1]: end\n");
+				break;                  
+			}
+
+			printf("[migration client socket 1]: send data success, size of data is %d\n", ret);
         }
         printf("[migration client socket 1] end\n");
 
@@ -434,12 +420,12 @@ void checkpoint(void *dummy1, void *dummy2, void *dummy3)
         
         k_msleep(20000);
         k_sched_lock();
-        k_thread_suspend(&threadA_data);// prevent threadA's integrity
+        // k_thread_suspend(&threadA_data);// prevent threadA's integrity
 
         thread_analyze_get(&threadA_data, &cpuload, &stackload);
         printf("\n[checkpoint]: start, threadA cpuload:%d stackload:%d\nsave threadA's infomation\n", cpuload, stackload);
 
-        memset(&thread_state, 0, sizeof(thread_state));
+        // memset(&thread_state, 0, sizeof(thread_state));
 
         register_save = threadA_data.callee_saved;
 
@@ -447,10 +433,11 @@ void checkpoint(void *dummy1, void *dummy2, void *dummy3)
 
     #ifdef CONFIG_X86
         thread_state.esp=register_save.esp;
-        printf("[checkpoint] threadA's esp:%ld\n", thread_state.esp);
+        printf("[checkpoint]: threadA's esp %ld\n", thread_state.esp);
 
         // memcpy(thread_state.stack, (char *)thread_stk.start, thread_stk.size);
-        memcpy(thread_state.stack, thread_state.esp - 20, thread_stk.start + thread_stk.size - thread_state.esp + 20);
+        memcpy(thread_state.stack, (void *)((size_t)thread_state.esp - 20),
+                thread_stk.start + thread_stk.size - (size_t)thread_state.esp + 20);
     #endif
 
         k_sched_unlock();
@@ -459,7 +446,7 @@ void checkpoint(void *dummy1, void *dummy2, void *dummy3)
         if(ok != 0){
             // todo: extend
             // int migration_num = get_load_blance();
-            int migration_num = 1;
+            int migration_num = 0;
 
             printf("[checkpoint]: the migration machine number is %d\n", migration_num);
 
@@ -477,7 +464,7 @@ void checkpoint(void *dummy1, void *dummy2, void *dummy3)
         }
 
         printf("[checkpoint]: end\n\n");
-        k_thread_resume(&threadA_data);// prevent threadA's integrity
+        // k_thread_resume(&threadA_data);// prevent threadA's integrity
 
         k_msleep(10000);
     }
@@ -516,11 +503,11 @@ void threadA(void *dummy1, void *dummy2, void *dummy3)
     ARG_UNUSED(dummy2);
     ARG_UNUSED(dummy3);
 
-    int machine_num = MACHINE_NUM;
+    // int machine_num = MACHINE_NUM;
     int cnt = 1;
     // int ok = 1; 
 
-    printf("[threadA] start, machine num is %d\n", machine_num);
+    // printf("[threadA] start, machine num is %d\n", machine_num);
 
     while (1){
         printf("[threadA] cycle counting: %d\n", cnt++);
@@ -574,16 +561,4 @@ void main(void)
             migration_client_socket, NULL, NULL, NULL,
             PRIORITY, 0, K_NO_WAIT);
     k_thread_name_set(&thread_client1_data, "thread_client_1");
-
-    // k_thread_create(&thread_client2_data, thread_client2_stack,
-    //      K_THREAD_STACK_SIZEOF(thread_client2_stack),
-    //      migration_client_sockets, NULL, NULL, NULL,
-    //      PRIORITY, 0, K_NO_WAIT);
-    // k_thread_name_set(&thread_client2_data, "thread_client_2");
-
-    // k_thread_create(&threadD_data, threadD_stack_area,
-    //      K_THREAD_STACK_SIZEOF(threadD_stack_area),
-    //      thread_loadget, NULL, NULL, NULL,
-    //      PRIORITY, 0, K_NO_WAIT);
-    // k_thread_name_set(&threadD_data, "thread_d");
 }
